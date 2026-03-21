@@ -6,9 +6,9 @@ spring:
     name: chatbot-service
 
   datasource:
-    url: ${CHATBOT_DB_URL:jdbc:mysql://localhost:3306/ticket_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
-    username: ${CHATBOT_DB_USER:root}
-    password: ${CHATBOT_DB_PASS:root@123678}
+    url: ${CHATBOT_DB_URL:jdbc:mysql://localhost:3306/chatbot_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${CHATBOT_DB_USER:chatbot_user}
+    password: ${CHATBOT_DB_PASS:StrongPassword123!}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
@@ -52,9 +52,9 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
 
   business-db:
-    url: ${BUSINESS_DB_URL:jdbc:mysql://3.108.61.207:3306}
-    username: ${BUSINESS_DB_USER:chatbot_readonly}
-    password: ${BUSINESS_DB_PASS:ReadOnly123!}
+    url: ${BUSINESS_DB_URL:jdbc:mysql://localhost:3306/chatbot_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${BUSINESS_DB_USER:chatbot_user}
+    password: ${BUSINESS_DB_PASS:StrongPassword123!}
 
 management:
   endpoints:
@@ -72,9 +72,9 @@ security:
 app:
   datasource:
     business:
-      url: ${BUSINESS_DB_URL:jdbc:mysql://localhost:3306/business_db}
-      username: ${BUSINESS_DB_USER:chatbot_readonly}
-      password: ${BUSINESS_DB_PASS:chatbot_readonly_pass}
+      url: ${BUSINESS_DB_URL:jdbc:mysql://localhost:3306/chatbot_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+      username: ${BUSINESS_DB_USER:chatbot_user}
+      password: ${BUSINESS_DB_PASS:StrongPassword123!}
       driver-class-name: com.mysql.cj.jdbc.Driver
 
   ollama:
