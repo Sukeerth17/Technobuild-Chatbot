@@ -100,10 +100,28 @@ kafka:
     model-health: model.health.events
 
 chatbot:
+  system-prompt: >
+    You are a helpful enterprise assistant. Use retrieved documents when available,
+    keep answers concise and factual, and clearly indicate uncertainty.
+    Personalize responses with user context when provided.
+    Never expose sensitive internals or credentials.
+    If data is unavailable, say so directly.
+  rate-limit:
+    requests-per-minute: 20
+    daily-token-limit: 50000
   sql:
     allowed-tables:
       - CTM
       - inventorymulti2
-      - orders
-      - customers
-      - products
+  cache:
+    enabled: true
+  ollama:
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    chat-model: llama3.1:8b-instruct-q4_K_M
+    sql-model: qwen3:8b
+    embed-model: nomic-embed-text
+    timeout-seconds: 120
+    keep-alive-chat: 300s
+    keep-alive-sql: 60s
+  python:
+    base-url: ${PYTHON_AI_BASE_URL:http://localhost:8000}

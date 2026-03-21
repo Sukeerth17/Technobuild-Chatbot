@@ -12,7 +12,7 @@ import reactor.netty.http.client.HttpClient;
 @Configuration
 public class PythonAiConfig {
 
-    @Value("${app.python-ai.base-url}")
+    @Value("${chatbot.python.base-url:${app.python-ai.base-url:http://localhost:8000}}")
     private String pythonAiBaseUrl;
 
     @Bean(name = "pythonAiWebClient")

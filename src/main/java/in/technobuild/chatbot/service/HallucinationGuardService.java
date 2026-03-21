@@ -1,11 +1,9 @@
 package in.technobuild.chatbot.service;
 
-import java.util.Arrays;
-import java.util.HashSet;
+import in.technobuild.chatbot.client.PythonAiClient;
+import in.technobuild.chatbot.entity.Feedback;
+import in.technobuild.chatbot.repository.FeedbackRepository;
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
-import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -13,27 +11,42 @@ import org.springframework.stereotype.Service;
 @Service
 public class HallucinationGuardService {
 
-    public boolean isGrounded(String answer, List<String> retrievedChunks) {
-        if (answer == null || answer.isBlank() || retrievedChunks == null || retrievedChunks.isEmpty()) {
-            return false;
-        }
+    private static final String DISCLAIMER =
+            "Note: This answer may need verification. Please confirm with official sources.\n\n";
 
-        Set<String> answerWords = tokenize(answer);
-        Set<String> chunkWords = tokenize(String.join(" ", retrievedChunks));
+    private final PythonAiClient pythonAiClient;
+    private final FeedbackRepository feedbackRepository;
 
-        if (answerWords.isEmpty() || chunkWords.isEmpty()) {
-            return false;
-        }
-
-        long overlap = answerWords.stream().filter(chunkWords::contains).count();
-        double overlapRatio = (double) overlap / (double) answerWords.size();
-        log.info("Hallucination check overlapRatio={}", overlapRatio);
-        return overlapRatio >= 0.35;
+    public HallucinationGuardService(PythonAiClient pythonAiClient, FeedbackRepository feedbackRepository) {
+        this.pythonAiClient = pythonAiClient;
+        this.feedbackRepository = feedbackRepository;
     }
 
-    private Set<String> tokenize(String text) {
-        return Arrays.stream(text.toLowerCase(Locale.ROOT).split("[^a-z0-9]+"))
-                .filter(word -> word.length() > 2)
-                .collect(Collectors.toCollection(HashSet::new));
+    public boolean isGrounded(String answer, List<String> retrievedChunks) {
+        try {
+            return pythonAiClient.checkConfidence(answer, retrievedChunks);
+        } catch (Exception ex) {
+            log.warn("Confidence check failed, allowing response to pass", ex);
+            return true;
+        }
+    }
+
+    public String addDisclaimerIfNeeded(String answer, List<String> retrievedChunks) {
+        return isGrounded(answer, retrievedChunks) ? answer : DISCLAIMER + answer;
+    }
+
+    public void flagForReview(Long messageId, Long userId, String answer, List<String> chunks) {
+        log.warn("Low confidence answer for messageId {} userId {}", messageId, userId);
+        Feedback feedback = Feedback.builder()
+                .messageId(messageId)
+                .userId(userId)
+                .conversationId(0L)
+                .question("AUTO_FLAGGED_LOW_CONFIDENCE")
+                .answer(answer == null ? "" : answer)
+                .rating(-1)
+                .comment("Automatically flagged by HallucinationGuardService")
+                .flagged(true)
+                .build();
+        feedbackRepository.save(feedback);
     }
 }

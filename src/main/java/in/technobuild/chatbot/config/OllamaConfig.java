@@ -12,7 +12,7 @@ import reactor.netty.http.client.HttpClient;
 @Configuration
 public class OllamaConfig {
 
-    @Value("${app.ollama.base-url}")
+    @Value("${chatbot.ollama.base-url:${app.ollama.base-url:http://localhost:11434}}")
     private String ollamaBaseUrl;
 
     @Bean(name = "ollamaWebClient")

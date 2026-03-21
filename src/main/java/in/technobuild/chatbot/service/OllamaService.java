@@ -10,6 +10,7 @@ import java.util.function.Consumer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -22,6 +23,9 @@ public class OllamaService {
 
     @Qualifier("ollamaWebClient")
     private final WebClient ollamaWebClient;
+
+    @Value("${chatbot.ollama.chat-model:llama3.1:8b-instruct-q4_K_M}")
+    private String chatModel;
 
     @CircuitBreaker(name = "ollama", fallbackMethod = "fallbackResponse")
     public void streamChatResponse(String prompt, Consumer<String> tokenConsumer) {
@@ -78,9 +82,37 @@ public class OllamaService {
         }
     }
 
+    public boolean isModelAvailable(String modelName) {
+        try {
+            String response = ollamaWebClient.get()
+                    .uri("/api/tags")
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(3));
+            if (response == null || response.isBlank()) {
+                return false;
+            }
+            JsonNode root = objectMapper.readTree(response);
+            JsonNode models = root.path("models");
+            if (!models.isArray()) {
+                return false;
+            }
+            for (JsonNode model : models) {
+                String name = model.path("name").asText("");
+                if (name.equals(modelName) || name.startsWith(modelName + ":")) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception ex) {
+            log.warn("Failed to verify model availability for {}", modelName, ex);
+            return false;
+        }
+    }
+
     private Map<String, Object> baseRequest(String prompt, boolean stream) {
         Map<String, Object> body = new HashMap<>();
-        body.put("model", "llama3.1:8b-instruct-q4_K_M");
+        body.put("model", chatModel);
         body.put("stream", stream);
         body.put("keep_alive", "300s");
 

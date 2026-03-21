@@ -4,6 +4,7 @@ import in.technobuild.chatbot.entity.SqlAuditLog;
 import in.technobuild.chatbot.kafka.model.SqlRequestEvent;
 import in.technobuild.chatbot.repository.SqlAuditLogRepository;
 import in.technobuild.chatbot.service.ConversationService;
+import in.technobuild.chatbot.service.CostTrackerService;
 import in.technobuild.chatbot.service.OllamaService;
 import in.technobuild.chatbot.service.PromptBuilderService;
 import in.technobuild.chatbot.service.SqlExecutionService;
@@ -28,6 +29,7 @@ public class SqlConsumer {
     private final SseEventPublisher sseEventPublisher;
     private final SqlAuditLogRepository sqlAuditLogRepository;
     private final ConversationService conversationService;
+    private final CostTrackerService costTrackerService;
     private final SqlExecutionService sqlExecutionService;
     private final PromptBuilderService promptBuilderService;
 
@@ -66,6 +68,7 @@ public class SqlConsumer {
             int assistantTokens = promptBuilderService.estimatePromptTokens(englishResponse);
             conversationService.saveMessage(event.getConversationId(), "USER", event.getOriginalQuestion(), userTokens);
             conversationService.saveMessage(event.getConversationId(), "ASSISTANT", englishResponse, assistantTokens);
+            costTrackerService.recordUsage(event.getUserId(), userTokens, assistantTokens);
 
             SqlAuditLog auditLog = SqlAuditLog.builder()
                     .userId(event.getUserId())

@@ -16,11 +16,13 @@ import in.technobuild.chatbot.sse.SseEmitterRegistry;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.Lazy;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -40,35 +42,36 @@ public class ChatController {
     private final ConversationService conversationService;
     private final PiiScrubberService piiScrubberService;
     private final ModelRouterService modelRouterService;
-
-    @Lazy
     private final RateLimiterService rateLimiterService;
-
-    @Lazy
     private final CostTrackerService costTrackerService;
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@Valid @RequestBody ChatRequestDto request,
-                           @AuthenticationPrincipal UserPrincipal user) {
+    public ResponseEntity<?> chat(@Valid @RequestBody ChatRequestDto request,
+                                  @AuthenticationPrincipal UserPrincipal user) {
+        if (user == null || user.getUserId() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "User not authenticated"));
+        }
+
+        Long userId = Long.parseLong(user.getUserId());
+        if (rateLimiterService.isBlacklisted(userId)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", "Your account is temporarily restricted."));
+        }
+        if (!rateLimiterService.isAllowed(userId)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", "Too many messages. Please wait 30 seconds."));
+        }
+        if (!costTrackerService.isWithinBudget(userId)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", costTrackerService.getBudgetExceededMessage()));
+        }
+
         String messageId = UUID.randomUUID().toString();
         SseEmitter emitter = new SseEmitter(120_000L);
         sseEmitterRegistry.register(messageId, emitter);
 
         try {
-            if (user == null || user.getUserId() == null) {
-                throw new IllegalStateException("User not authenticated");
-            }
-
-            Long userId = Long.parseLong(user.getUserId());
-
-            if (!rateLimiterService.isAllowed(userId)) {
-                throw new IllegalStateException("Rate limit exceeded");
-            }
-
-            if (!costTrackerService.hasBudget(userId)) {
-                throw new IllegalStateException("Daily token budget exceeded");
-            }
-
             Conversation conversation = conversationService.getOrCreateConversation(userId, request.getSessionId());
             String scrubbedMessage = piiScrubberService.scrub(request.getMessage());
 
@@ -99,7 +102,9 @@ public class ChatController {
                 chatRequestProducer.publish(event);
                 log.info("Chat request published for messageId={}", messageId);
             }
-            return emitter;
+            return ResponseEntity.ok()
+                    .contentType(MediaType.TEXT_EVENT_STREAM)
+                    .body(emitter);
         } catch (Exception ex) {
             log.error("Failed to process /api/chat request", ex);
             try {
@@ -109,7 +114,9 @@ public class ChatController {
             }
             emitter.completeWithError(ex);
             sseEmitterRegistry.remove(messageId);
-            return emitter;
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .contentType(MediaType.TEXT_EVENT_STREAM)
+                    .body(emitter);
         }
     }
 }

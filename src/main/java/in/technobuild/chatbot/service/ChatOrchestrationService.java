@@ -26,6 +26,7 @@ public class ChatOrchestrationService {
     private final OllamaService ollamaService;
     private final SseEventPublisher sseEventPublisher;
     private final HallucinationGuardService hallucinationGuardService;
+    private final CostTrackerService costTrackerService;
     private final AuditLogRepository auditLogRepository;
     private final MessageRepository messageRepository;
 
@@ -76,18 +77,17 @@ public class ChatOrchestrationService {
                                   String assistantResponseRaw) {
         String assistantResponse = assistantResponseRaw == null ? "" : assistantResponseRaw.trim();
         boolean grounded = hallucinationGuardService.isGrounded(assistantResponse, chunks);
-
         if (!grounded) {
-            String disclaimer = "Note: This answer may need verification. ";
-            assistantResponse = disclaimer + assistantResponse;
-            sseEventPublisher.sendToken(event.getMessageId(), "\n" + disclaimer);
+            hallucinationGuardService.flagForReview(event.getConversationId(), event.getUserId(), assistantResponse, chunks);
         }
+        assistantResponse = hallucinationGuardService.addDisclaimerIfNeeded(assistantResponse, chunks);
 
         int userTokens = promptBuilderService.estimatePromptTokens(event.getUserMessage());
         int assistantTokens = promptBuilderService.estimatePromptTokens(assistantResponse);
 
         conversationService.saveMessage(conversation.getId(), "USER", event.getUserMessage(), userTokens);
         conversationService.saveMessage(conversation.getId(), "ASSISTANT", assistantResponse, assistantTokens);
+        costTrackerService.recordUsage(event.getUserId(), userTokens, assistantTokens);
 
         saveAuditLog(event, conversation, assistantResponse, userTokens + assistantTokens);
         sseEventPublisher.sendComplete(event.getMessageId());
