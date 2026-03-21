@@ -1,9 +1,11 @@
 package in.technobuild.chatbot.controller;
 
+import in.technobuild.chatbot.dto.request.DocumentUploadDto;
 import in.technobuild.chatbot.dto.response.IngestionStatusDto;
 import in.technobuild.chatbot.entity.Document;
 import in.technobuild.chatbot.security.UserPrincipal;
 import in.technobuild.chatbot.service.DocumentIngestionService;
+import jakarta.validation.Valid;
 import java.time.Duration;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
@@ -39,12 +42,16 @@ public class DocumentController {
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<IngestionStatusDto> upload(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "category", required = false) String category,
-            @RequestParam(value = "audience", defaultValue = "CUSTOMER") String audience,
+            @Valid @ModelAttribute DocumentUploadDto request,
             @AuthenticationPrincipal UserPrincipal user) {
 
         Long userId = Long.parseLong(user.getUserId());
-        String jobId = documentIngestionService.initiateIngestion(file, category, audience, userId);
+        String jobId = documentIngestionService.initiateIngestion(
+                file,
+                request.getCategory(),
+                request.getAudience(),
+                userId
+        );
 
         try {
             byteArrayRedisTemplate.opsForValue().set("ingestion:file:" + jobId, file.getBytes(), Duration.ofHours(1));

@@ -120,6 +120,25 @@ public class ConversationService {
         log.info("Deleted user history for userId={}", userId);
     }
 
+    public List<Conversation> getConversationsForUser(Long userId) {
+        return conversationRepository.findByUserIdOrderByLastActiveDesc(userId);
+    }
+
+    public List<Message> getMessagesForUserSession(Long userId, String sessionId) {
+        Conversation conversation = conversationRepository.findByUserIdAndSessionId(userId, sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("Conversation not found for this user"));
+        return messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());
+    }
+
+    public void deleteConversationBySession(Long userId, String sessionId) {
+        Conversation conversation = conversationRepository.findByUserIdAndSessionId(userId, sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("Conversation not found for this user"));
+        messageRepository.deleteByConversationId(conversation.getId());
+        conversationRepository.delete(conversation);
+        redisTemplate.delete(getRedisHistoryKey(sessionId));
+        log.info("Deleted conversation for userId={} sessionId={}", userId, sessionId);
+    }
+
     private Message.Role parseRole(String role) {
         return "ASSISTANT".equalsIgnoreCase(role) ? Message.Role.ASSISTANT : Message.Role.USER;
     }

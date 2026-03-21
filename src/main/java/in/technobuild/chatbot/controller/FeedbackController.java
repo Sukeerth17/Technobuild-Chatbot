@@ -3,6 +3,7 @@ package in.technobuild.chatbot.controller;
 import in.technobuild.chatbot.dto.request.FeedbackRequestDto;
 import in.technobuild.chatbot.security.UserPrincipal;
 import in.technobuild.chatbot.service.FeedbackService;
+import jakarta.validation.Valid;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,7 +24,7 @@ public class FeedbackController {
     private final FeedbackService feedbackService;
 
     @PostMapping
-    public ResponseEntity<Void> submitFeedback(@RequestBody FeedbackRequestDto request,
+    public ResponseEntity<Void> submitFeedback(@Valid @RequestBody FeedbackRequestDto request,
                                                @AuthenticationPrincipal UserPrincipal user) {
         Long userId = Long.parseLong(user.getUserId());
         feedbackService.saveFeedback(

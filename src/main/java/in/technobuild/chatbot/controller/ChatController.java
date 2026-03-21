@@ -1,14 +1,20 @@
 package in.technobuild.chatbot.controller;
 
 import in.technobuild.chatbot.dto.request.ChatRequestDto;
+import in.technobuild.chatbot.entity.AuditLog;
 import in.technobuild.chatbot.entity.Conversation;
+import in.technobuild.chatbot.entity.Message;
+import in.technobuild.chatbot.exception.RateLimitExceededException;
+import in.technobuild.chatbot.exception.TokenBudgetExceededException;
 import in.technobuild.chatbot.kafka.model.ChatRequestEvent;
 import in.technobuild.chatbot.kafka.model.SqlRequestEvent;
 import in.technobuild.chatbot.kafka.producer.ChatRequestProducer;
 import in.technobuild.chatbot.kafka.producer.SqlRequestProducer;
+import in.technobuild.chatbot.repository.AuditLogRepository;
 import in.technobuild.chatbot.security.UserPrincipal;
 import in.technobuild.chatbot.service.ConversationService;
 import in.technobuild.chatbot.service.CostTrackerService;
+import in.technobuild.chatbot.service.InjectionGuardService;
 import in.technobuild.chatbot.service.ModelRouterService;
 import in.technobuild.chatbot.service.PiiScrubberService;
 import in.technobuild.chatbot.service.RateLimiterService;
@@ -16,14 +22,17 @@ import in.technobuild.chatbot.sse.SseEmitterRegistry;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.time.LocalDateTime;
-import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -44,27 +53,25 @@ public class ChatController {
     private final ModelRouterService modelRouterService;
     private final RateLimiterService rateLimiterService;
     private final CostTrackerService costTrackerService;
+    private final InjectionGuardService injectionGuardService;
+    private final AuditLogRepository auditLogRepository;
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<?> chat(@Valid @RequestBody ChatRequestDto request,
-                                  @AuthenticationPrincipal UserPrincipal user) {
-        if (user == null || user.getUserId() == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("error", "User not authenticated"));
-        }
+    public ResponseEntity<SseEmitter> chat(@Valid @RequestBody ChatRequestDto request,
+                                           @AuthenticationPrincipal UserPrincipal user) {
+        Long userId = parseUserId(user);
 
-        Long userId = Long.parseLong(user.getUserId());
         if (rateLimiterService.isBlacklisted(userId)) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body(Map.of("error", "Your account is temporarily restricted."));
+            throw new RateLimitExceededException("Your account is temporarily restricted.", 30L);
         }
         if (!rateLimiterService.isAllowed(userId)) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body(Map.of("error", "Too many messages. Please wait 30 seconds."));
+            throw new RateLimitExceededException("Too many messages. Please wait 30 seconds.", 30L);
         }
         if (!costTrackerService.isWithinBudget(userId)) {
-            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                    .body(Map.of("error", costTrackerService.getBudgetExceededMessage()));
+            throw new TokenBudgetExceededException(
+                    costTrackerService.getBudgetExceededMessage(),
+                    costTrackerService.getRemainingBudget(userId)
+            );
         }
 
         String messageId = UUID.randomUUID().toString();
@@ -72,6 +79,15 @@ public class ChatController {
         sseEmitterRegistry.register(messageId, emitter);
 
         try {
+            if (injectionGuardService.isInjectionAttempt(request.getMessage())) {
+                injectionGuardService.handleInjectionAttempt(userId, request.getMessage());
+                emitter.send(SseEmitter.event().data(injectionGuardService.getInjectionResponse()));
+                emitter.send(SseEmitter.event().name("complete").data("[DONE]"));
+                emitter.complete();
+                sseEmitterRegistry.remove(messageId);
+                return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(emitter);
+            }
+
             Conversation conversation = conversationService.getOrCreateConversation(userId, request.getSessionId());
             String scrubbedMessage = piiScrubberService.scrub(request.getMessage());
 
@@ -102,21 +118,81 @@ public class ChatController {
                 chatRequestProducer.publish(event);
                 log.info("Chat request published for messageId={}", messageId);
             }
-            return ResponseEntity.ok()
-                    .contentType(MediaType.TEXT_EVENT_STREAM)
-                    .body(emitter);
+            return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(emitter);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to stream injection response", ex);
         } catch (Exception ex) {
             log.error("Failed to process /api/chat request", ex);
             try {
                 emitter.send(SseEmitter.event().name("error").data("Something went wrong. Please try again."));
-            } catch (IOException ioEx) {
-                log.error("Failed to send SSE error event", ioEx);
+            } catch (IOException ignored) {
+                log.error("Failed to send SSE error event", ignored);
             }
             emitter.completeWithError(ex);
             sseEmitterRegistry.remove(messageId);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .contentType(MediaType.TEXT_EVENT_STREAM)
-                    .body(emitter);
+            throw ex;
         }
+    }
+
+    @GetMapping("/conversations")
+    public ResponseEntity<List<Conversation>> conversations(@AuthenticationPrincipal UserPrincipal user) {
+        Long userId = parseUserId(user);
+        return ResponseEntity.ok(conversationService.getConversationsForUser(userId));
+    }
+
+    @GetMapping("/conversations/{sessionId}/messages")
+    public ResponseEntity<List<Message>> conversationMessages(@PathVariable String sessionId,
+                                                              @AuthenticationPrincipal UserPrincipal user) {
+        Long userId = parseUserId(user);
+        try {
+            return ResponseEntity.ok(conversationService.getMessagesForUserSession(userId, sessionId));
+        } catch (IllegalArgumentException ex) {
+            throw new AccessDeniedException("Session does not belong to user");
+        }
+    }
+
+    @DeleteMapping("/conversations/{sessionId}")
+    public ResponseEntity<Void> deleteConversation(@PathVariable String sessionId,
+                                                   @AuthenticationPrincipal UserPrincipal user) {
+        Long userId = parseUserId(user);
+        try {
+            conversationService.deleteConversationBySession(userId, sessionId);
+        } catch (IllegalArgumentException ex) {
+            throw new AccessDeniedException("Session does not belong to user");
+        }
+
+        auditLogRepository.save(AuditLog.builder()
+                .userId(userId)
+                .sessionId(sessionId)
+                .eventType(AuditLog.EventType.DATA_DELETION)
+                .tokensUsed(0)
+                .latencyMs(0)
+                .createdAt(LocalDateTime.now())
+                .build());
+
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/history")
+    public ResponseEntity<Void> deleteAllHistory(@AuthenticationPrincipal UserPrincipal user) {
+        Long userId = parseUserId(user);
+        conversationService.deleteUserHistory(userId);
+
+        auditLogRepository.save(AuditLog.builder()
+                .userId(userId)
+                .eventType(AuditLog.EventType.DATA_DELETION)
+                .tokensUsed(0)
+                .latencyMs(0)
+                .createdAt(LocalDateTime.now())
+                .build());
+
+        return ResponseEntity.noContent().build();
+    }
+
+    private Long parseUserId(UserPrincipal user) {
+        if (user == null || user.getUserId() == null) {
+            throw new AccessDeniedException("User not authenticated");
+        }
+        return Long.parseLong(user.getUserId());
     }
 }

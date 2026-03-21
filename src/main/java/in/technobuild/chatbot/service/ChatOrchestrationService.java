@@ -4,11 +4,11 @@ import in.technobuild.chatbot.entity.AuditLog;
 import in.technobuild.chatbot.entity.Conversation;
 import in.technobuild.chatbot.kafka.model.ChatRequestEvent;
 import in.technobuild.chatbot.repository.AuditLogRepository;
-import in.technobuild.chatbot.repository.MessageRepository;
 import in.technobuild.chatbot.sse.SseEventPublisher;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.RequiredArgsConstructor;
@@ -28,10 +28,22 @@ public class ChatOrchestrationService {
     private final HallucinationGuardService hallucinationGuardService;
     private final CostTrackerService costTrackerService;
     private final AuditLogRepository auditLogRepository;
-    private final MessageRepository messageRepository;
 
     public void processChat(ChatRequestEvent event) {
         try {
+            long startedAt = System.currentTimeMillis();
+            String questionHash = hashText(event.getUserMessage());
+
+            auditLogRepository.save(AuditLog.builder()
+                    .userId(event.getUserId())
+                    .sessionId(event.getSessionId())
+                    .eventType(AuditLog.EventType.QUESTION)
+                    .questionHash(questionHash)
+                    .tokensUsed(0)
+                    .latencyMs(0)
+                    .createdAt(LocalDateTime.now())
+                    .build());
+
             Conversation conversation = conversationService.getOrCreateConversation(event.getUserId(), event.getSessionId());
             List<in.technobuild.chatbot.entity.Message> history = conversationService.loadHistory(conversation.getSessionId());
             List<String> chunks = ragService.retrieveRelevantChunks(event.getUserMessage(), null);
@@ -53,7 +65,7 @@ public class ChatOrchestrationService {
             ollamaService.streamChatResponse(prompt, token -> {
                 if ("[DONE]".equals(token)) {
                     if (completed.compareAndSet(false, true)) {
-                        handleCompletion(event, conversation, chunks, assistantResponseBuffer.toString());
+                        handleCompletion(event, conversation, chunks, assistantResponseBuffer.toString(), questionHash, startedAt);
                     }
                     return;
                 }
@@ -63,7 +75,7 @@ public class ChatOrchestrationService {
             });
 
             if (!completed.get()) {
-                handleCompletion(event, conversation, chunks, assistantResponseBuffer.toString());
+                handleCompletion(event, conversation, chunks, assistantResponseBuffer.toString(), questionHash, startedAt);
             }
         } catch (Exception ex) {
             log.error("Chat orchestration failed for messageId={}", event.getMessageId(), ex);
@@ -74,7 +86,9 @@ public class ChatOrchestrationService {
     private void handleCompletion(ChatRequestEvent event,
                                   Conversation conversation,
                                   List<String> chunks,
-                                  String assistantResponseRaw) {
+                                  String assistantResponseRaw,
+                                  String questionHash,
+                                  long startedAt) {
         String assistantResponse = assistantResponseRaw == null ? "" : assistantResponseRaw.trim();
         boolean grounded = hallucinationGuardService.isGrounded(assistantResponse, chunks);
         if (!grounded) {
@@ -89,22 +103,40 @@ public class ChatOrchestrationService {
         conversationService.saveMessage(conversation.getId(), "ASSISTANT", assistantResponse, assistantTokens);
         costTrackerService.recordUsage(event.getUserId(), userTokens, assistantTokens);
 
-        saveAuditLog(event, conversation, assistantResponse, userTokens + assistantTokens);
+        saveAnswerAuditLog(
+                event,
+                conversation,
+                assistantResponse,
+                userTokens + assistantTokens,
+                questionHash,
+                startedAt,
+                chunks
+        );
         sseEventPublisher.sendComplete(event.getMessageId());
     }
 
-    private void saveAuditLog(ChatRequestEvent event,
-                              Conversation conversation,
-                              String response,
-                              int tokensUsed) {
+    private void saveAnswerAuditLog(ChatRequestEvent event,
+                                    Conversation conversation,
+                                    String response,
+                                    int tokensUsed,
+                                    String questionHash,
+                                    long startedAt,
+                                    List<String> chunks) {
+        int latencyMs = (int) Math.max(0L, System.currentTimeMillis() - startedAt);
+        List<String> chunkIds = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            chunkIds.add(hashText(chunks.get(i)));
+        }
+
         AuditLog auditLog = AuditLog.builder()
                 .userId(event.getUserId())
                 .sessionId(conversation.getSessionId())
                 .eventType(AuditLog.EventType.ANSWER)
-                .questionHash(sha256(event.getUserMessage()))
-                .responseHash(sha256(response))
+                .questionHash(questionHash)
+                .docIdsRetrieved(toJson(chunkIds))
+                .responseHash(hashText(response))
                 .tokensUsed(tokensUsed)
-                .latencyMs(0)
+                .latencyMs(latencyMs)
                 .createdAt(LocalDateTime.now())
                 .build();
 
@@ -112,7 +144,7 @@ public class ChatOrchestrationService {
         log.info("Saved audit log for messageId={}", event.getMessageId());
     }
 
-    private String sha256(String value) {
+    private String hashText(String value) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest((value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
@@ -125,5 +157,17 @@ public class ChatOrchestrationService {
             log.error("Failed to hash value", ex);
             return "";
         }
+    }
+
+    private String toJson(List<String> values) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                builder.append(",");
+            }
+            builder.append("\"").append(values.get(i)).append("\"");
+        }
+        builder.append("]");
+        return builder.toString();
     }
 }

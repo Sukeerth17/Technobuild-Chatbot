@@ -2,6 +2,7 @@ package in.technobuild.chatbot.dto.request;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
@@ -21,10 +22,12 @@ public class FeedbackRequestDto {
     @NotNull
     private Long conversationId;
 
-    @NotNull
+    @NotBlank
+    @Size(max = 5000)
     private String question;
 
-    @NotNull
+    @NotBlank
+    @Size(max = 5000)
     private String answer;
 
     @NotNull

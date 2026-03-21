@@ -4,6 +4,7 @@ import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.Refill;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -17,6 +18,7 @@ public class RateLimiterService {
 
     private static final String RATE_KEY_PREFIX = "rate:";
     private static final String BLACKLIST_KEY_PREFIX = "blacklist:";
+    private static final String ABUSE_KEY_PREFIX = "abuse:";
 
     private final RedisTemplate<String, String> redisTemplate;
     private final int requestsPerMinute;
@@ -63,6 +65,37 @@ public class RateLimiterService {
         }
         redisTemplate.opsForValue().set(BLACKLIST_KEY_PREFIX + userId, "1", duration);
         log.warn("User {} blacklisted for {}", userId, duration);
+    }
+
+    public long incrementAbuseCount(Long userId) {
+        if (userId == null) {
+            return 0L;
+        }
+        String key = abuseKey(userId);
+        Long count = redisTemplate.opsForValue().increment(key);
+        if (count != null && count == 1L) {
+            redisTemplate.expire(key, Duration.ofDays(1));
+        }
+        return count == null ? 0L : count;
+    }
+
+    public long getAbuseCountToday(Long userId) {
+        if (userId == null) {
+            return 0L;
+        }
+        String raw = redisTemplate.opsForValue().get(abuseKey(userId));
+        if (raw == null || raw.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(raw);
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
+    }
+
+    private String abuseKey(Long userId) {
+        return ABUSE_KEY_PREFIX + userId + ":" + LocalDate.now();
     }
 
     private Bucket newBucket(Long userId) {

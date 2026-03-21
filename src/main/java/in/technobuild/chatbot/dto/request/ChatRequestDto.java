@@ -13,8 +13,8 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class ChatRequestDto {
 
-    @NotBlank
-    @Size(max = 2000)
+    @NotBlank(message = "Message cannot be empty")
+    @Size(max = 2000, message = "Message cannot exceed 2000 characters")
     private String message;
 
     private String sessionId;
