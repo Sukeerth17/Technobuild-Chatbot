@@ -14,6 +14,8 @@ public interface VectorChunkRepository extends JpaRepository<VectorChunk, Long> 
 
     List<VectorChunk> findByCategory(String category);
 
+    void deleteByDocumentId(Long documentId);
+
     @Query(value = "SELECT * FROM vector_chunks WHERE " +
             "MATCH(content) AGAINST (:query IN BOOLEAN MODE) " +
             "AND (:category IS NULL OR category = :category) " +

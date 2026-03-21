@@ -11,7 +11,11 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
 
 @Slf4j
@@ -115,6 +119,52 @@ public class PythonAiClient {
         }
     }
 
+    public ParseDocumentResult parseDocument(byte[] fileBytes, String fileType, String fileName) {
+        try {
+            MultiValueMap<String, Object> multipartBody = new LinkedMultiValueMap<>();
+            multipartBody.add("file", new NamedByteArrayResource(fileBytes, fileName));
+            multipartBody.add("file_type", fileType);
+
+            ParseDocumentResponse response = pythonAiWebClient.post()
+                    .uri("/parse-document")
+                    .contentType(MediaType.MULTIPART_FORM_DATA)
+                    .bodyValue(multipartBody)
+                    .retrieve()
+                    .bodyToMono(ParseDocumentResponse.class)
+                    .block(Duration.ofSeconds(60));
+
+            if (response == null || response.getText() == null) {
+                return new ParseDocumentResult("", 0, 0);
+            }
+            return new ParseDocumentResult(
+                    response.getText(),
+                    response.getPages() == null ? 0 : response.getPages(),
+                    response.getWordCount() == null ? 0 : response.getWordCount()
+            );
+        } catch (Exception ex) {
+            log.error("Python parse-document call failed", ex);
+            return new ParseDocumentResult("", 0, 0);
+        }
+    }
+
+    public List<List<Float>> embedBatch(List<String> texts) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+        try {
+            EmbedBatchResponse response = pythonAiWebClient.post()
+                    .uri("/embed-batch")
+                    .bodyValue(new EmbedBatchRequest(texts))
+                    .retrieve()
+                    .bodyToMono(EmbedBatchResponse.class)
+                    .block(Duration.ofSeconds(60));
+            return response != null && response.getEmbeddings() != null ? response.getEmbeddings() : List.of();
+        } catch (Exception ex) {
+            log.error("Python embed-batch call failed", ex);
+            return List.of();
+        }
+    }
+
     public PythonSqlResponse callGetResponse(String prompt, String uuid, boolean firstRequest, Duration timeout) {
         try {
             GetResponseRequest request = new GetResponseRequest(prompt, firstRequest, uuid);
@@ -145,6 +195,9 @@ public class PythonAiClient {
     public record PythonSqlResponse(List<Map<String, Object>> response, String uuid) {
     }
 
+    public record ParseDocumentResult(String text, int pages, int wordCount) {
+    }
+
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
@@ -157,6 +210,21 @@ public class PythonAiClient {
     @AllArgsConstructor
     private static class EmbedResponse {
         private List<Float> embedding;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    private static class EmbedBatchRequest {
+        private List<String> texts;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    private static class EmbedBatchResponse {
+        private List<List<Float>> embeddings;
+        private Integer count;
     }
 
     @Data
@@ -226,5 +294,30 @@ public class PythonAiClient {
     @AllArgsConstructor
     private static class HealthResponse {
         private String status;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    private static class ParseDocumentResponse {
+        private String text;
+        private Integer pages;
+        @JsonProperty("word_count")
+        private Integer wordCount;
+        private String error;
+    }
+
+    private static final class NamedByteArrayResource extends ByteArrayResource {
+        private final String filename;
+
+        private NamedByteArrayResource(byte[] byteArray, String filename) {
+            super(byteArray == null ? new byte[0] : byteArray);
+            this.filename = filename == null || filename.isBlank() ? "upload.bin" : filename;
+        }
+
+        @Override
+        public String getFilename() {
+            return filename;
+        }
     }
 }

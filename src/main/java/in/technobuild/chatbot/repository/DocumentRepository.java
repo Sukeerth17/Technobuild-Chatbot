@@ -12,9 +12,13 @@ public interface DocumentRepository extends JpaRepository<Document, Long> {
 
     Optional<Document> findByFileHash(String fileHash);
 
+    Optional<Document> findByJobId(String jobId);
+
     List<Document> findByStatus(Document.DocumentStatus status);
 
     List<Document> findByUploadedBy(Long userId);
+
+    List<Document> findAllByOrderByCreatedAtDesc();
 
     @Query("SELECT d FROM Document d WHERE d.status = in.technobuild.chatbot.entity.Document$DocumentStatus.COMPLETED " +
             "AND d.lastModified > d.lastEmbedded")

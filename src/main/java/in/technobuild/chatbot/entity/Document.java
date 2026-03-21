@@ -42,6 +42,9 @@ public class Document {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "job_id", nullable = false, unique = true, length = 36)
+    private String jobId;
+
     @Column(name = "file_name", nullable = false, length = 500)
     private String fileName;
 

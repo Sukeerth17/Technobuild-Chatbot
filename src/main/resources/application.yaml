@@ -8,7 +8,7 @@ spring:
   datasource:
     url: ${CHATBOT_DB_URL:jdbc:mysql://localhost:3306/chatbot_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
     username: ${CHATBOT_DB_USER:chatbot_user}
-    password: ${CHATBOT_DB_PASS:StrongPassword123!}
+    password: ${CHATBOT_DB_PASS:root@123678}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
@@ -37,6 +37,11 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       timeout: 2s
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
