@@ -1,0 +1,44 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic==2.5.3
+
+# Database
+PyMySQL==1.1.1
+SQLAlchemy==2.0.48
+
+# Redis
+redis==5.0.1
+
+# Ollama + AI - Keep original versions that exist
+requests==2.31.0
+crewai==0.11.2
+litellm==1.20.0
+ollama==0.1.6
+
+# Build/setup tools (needed for crewai 0.11.2)
+setuptools==67.8.0
+
+# Embeddings
+embedchain==0.1.98
+sentence-transformers==2.4.0
+
+# ML libraries
+torch==2.1.0
+transformers==4.37.0
+
+# Document parsing
+PyMuPDF==1.23.8
+python-docx==1.1.0
+
+# Data processing
+pandas==2.1.4
+openpyxl==3.1.2
+numpy==1.26.3
+
+# Environment and config
+python-dotenv==1.0.0
+python-multipart==0.0.6
+
+# Logging
+python-json-logger==2.0.7
