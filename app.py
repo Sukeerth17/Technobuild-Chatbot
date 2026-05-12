@@ -23,7 +23,6 @@ from pythonjsonlogger import jsonlogger
 from sentence_transformers import CrossEncoder
 
 from db import close_connection, create_connection, execute_query, get_schema_info
-from extract_data import extract_details
 from system_prompt import run_mysql_query_agent
 
 # 2. Environment variable loading
@@ -70,7 +69,6 @@ logger.addHandler(stream_handler)
 logger.propagate = False
 
 # Global runtime state
-cached_details: List[Dict[str, Any]] = []
 rerank_model: Optional[CrossEncoder] = None
 
 
@@ -88,13 +86,7 @@ async def _warm_ollama_embed() -> bool:
         return False
 
 
-def _reload_cached_details() -> int:
-    global cached_details
-    details: List[Dict[str, Any]] = []
-    details.extend(extract_details("CTM_table.xlsx") or [])
-    details.extend(extract_details("inventory_table_details.xlsx") or [])
-    cached_details = details
-    return len(cached_details)
+# Cached details removed in favor of semantic context in system_prompt.py
 
 
 # 6. Lifespan function (startup events)
@@ -117,14 +109,13 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        total = _reload_cached_details()
         logger.info(
-            f"Cached {total} table detail records",
+            "Semantic schema context loaded directly in system_prompt.py",
             extra={"endpoint": "startup", "user_uuid": ""},
         )
     except Exception as e:
         logger.error(
-            "Failed to cache table details",
+            "Failed to log semantic load",
             extra={"endpoint": "startup", "user_uuid": "", "error": str(e)},
         )
 
@@ -383,7 +374,6 @@ async def ready_check():
         "redis": "DOWN",
         "mysql": "DOWN",
         "qwen3_loaded": False,
-        "cached_details_count": len(cached_details),
     }
 
     try:
@@ -555,7 +545,7 @@ async def confidence_check(request: ConfidenceRequest):
         chunk_words = _extract_keywords(" ".join(request.retrieved_chunks or []))
         overlap = len(answer_words & chunk_words)
         score = overlap / max(1, len(answer_words))
-        is_grounded = score >= 0.35
+        is_grounded = score >= 0.25
 
         return {
             "score": round(score, 4),
@@ -654,14 +644,13 @@ async def get_response(request: PromptRequest):
                 previous_history = []
 
         conn, cursor = get_db_connection()
-        schema_info = get_schema_info(cursor, ["CTM", "inventorymulti2"])
+        schema_info = get_schema_info(cursor, ["LEADS", "ACTIVITIES", "FOLLOW_UP", "STAGE", "SOURCE", "USER_DETAILS"])
         if not schema_info:
             return error_response(503, "Dependency unavailable", "SCHEMA_UNAVAILABLE")
 
         try:
             sql_query = run_mysql_query_agent(
                 schema_info=schema_info,
-                details=cached_details,
                 user_request=request.prompt,
                 model="qwen3:8b",
             )
@@ -734,12 +723,11 @@ async def reload_cache(request: Request, x_admin_token: Optional[str] = Header(d
     try:
         if not _is_admin_request(request, x_admin_token):
             return error_response(403, "Forbidden", "FORBIDDEN")
-        total = _reload_cached_details()
         logger.info(
-            f"Cache reloaded with {total} records",
+            "Cache reload triggered (no-op as context is hardcoded)",
             extra={"endpoint": "/cache/reload", "user_uuid": ""},
         )
-        return {"message": "Cache reloaded", "cached_details_count": total}
+        return {"message": "Semantic context is hardcoded. No dynamic cache to reload."}
     except Exception as e:
         logger.error(
             f"Error in /cache/reload: {str(e)}",
